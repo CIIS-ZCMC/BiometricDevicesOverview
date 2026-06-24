@@ -9,6 +9,9 @@ class HomeController extends Controller
 {
     public function index()
     {
-        return Inertia::render('Home');
+        $deviceApiUrl = env('DEVICE_API');
+        return Inertia::render('Home', [
+            'deviceApiUrl' => $deviceApiUrl,
+        ]);
     }
 }

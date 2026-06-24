@@ -1,243 +1,299 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 
-export default function Home() {
+export default function Home({deviceApiUrl}) {
     const [devices, setDevices] = useState([]);
-    const [status, setStatus] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [showOnlineOnly, setShowOnlineOnly] = useState(false);
+    const [showAttendanceOnly, setShowAttendanceOnly] = useState(false);
+    const [lastUpdated, setLastUpdated] = useState(null);
     const [stats, setStats] = useState({
         totalDevices: 0,
         onlineDevices: 0,
         offlineDevices: 0,
-
     });
 
     useEffect(() => {
-        axios.post('/api/deviceList')
-            .then(response => {
-                setDevices(response.data.devices);
-            })
-            .catch(error => {
-                console.error('Error fetching status:', error);
-            });
-    }, []);
-
-
-
-    // Fetch status from API
-    useEffect(() => {
-        const fetchStatus = () => {
-            axios.post('/api/status')
+        const fetchDevices = () => {
+            axios.get(deviceApiUrl)
                 .then(response => {
-                    setStatus(response.data.devices);
+                    const deviceData = response.data.data || [];
+                    setDevices(deviceData);
                     setStats({
-                        totalDevices: response.data.totalDevices,
-                        onlineDevices: response.data.onlineDevices,
-                        offlineDevices: response.data.offlineDevices,
+                        totalDevices: deviceData.length,
+                        onlineDevices: deviceData.filter(d => d.connection_status === 'online').length,
+                        offlineDevices: deviceData.filter(d => d.connection_status === 'offline').length,
                     });
+                    setLastUpdated(new Date());
+                    setLoading(false);
                 })
                 .catch(error => {
-                    console.error('Error fetching status:', error);
+                    console.error('Error fetching devices:', error);
+                    setLoading(false);
                 });
         };
 
-        // Initial call
-        fetchStatus();
-
-        // Set interval for every 3 minutes (180,000 milliseconds)
-        const interval = setInterval(fetchStatus, 180000);
-
-        // Cleanup interval on component unmount
+        fetchDevices();
+        const interval = setInterval(fetchDevices, 10000);
         return () => clearInterval(interval);
     }, []);
 
-    // Simulate live updates
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setDevices(prevDevices =>
-                prevDevices.map(device => ({
-                    ...device,
-                    lastSeen: getRandomLastSeen(),
-                    signal: device.status === 'online' ? Math.max(70, Math.min(100, device.signal + Math.floor(Math.random() * 11) - 5)) : device.signal,
-                    battery: device.status === 'online' ? Math.max(0, Math.min(100, device.battery - Math.floor(Math.random() * 2))) : device.battery
-                }))
-            );
-        }, 10000); // Update every 10 seconds
+    const formatLastSeen = (dateString) => {
+        if (!dateString) return 'Never';
+        const date = new Date(dateString);
+        const now = new Date();
+        const diffSeconds = Math.floor((now - date) / 1000);
 
-        return () => clearInterval(interval);
-    }, []);
-
-    const getRandomLastSeen = () => {
-        const times = ['30 seconds ago', '1 minute ago', '2 minutes ago', '5 minutes ago', '10 minutes ago'];
-        return times[Math.floor(Math.random() * times.length)];
+        if (diffSeconds < 60) return 'Just now';
+        if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}m ago`;
+        if (diffSeconds < 86400) return `${Math.floor(diffSeconds / 3600)}h ago`;
+        return date.toLocaleDateString();
     };
 
-    const getStatusColor = (status) => {
-        switch (status) {
-            case 'online': return 'bg-green-500';
-            case 'offline': return 'bg-red-500';
-            case 'warning': return 'bg-yellow-500';
-            default: return 'bg-gray-500';
+    const formatLastUpdated = (date) => {
+        if (!date) return '—';
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    };
+
+    const onlineRate = stats.totalDevices > 0
+        ? Math.round((stats.onlineDevices / stats.totalDevices) * 100)
+        : 0;
+
+    const filteredDevices = useMemo(() => {
+        const sorted = [...devices].sort((a, b) => {
+            if (a.connection_status === 'online' && b.connection_status !== 'online') return -1;
+            if (a.connection_status !== 'online' && b.connection_status === 'online') return 1;
+            return a.device_name.localeCompare(b.device_name);
+        });
+
+        let filtered = sorted;
+
+        if (showOnlineOnly) {
+            filtered = filtered.filter(device => device.connection_status === 'online');
         }
-    };
 
-    const getStatusTextColor = (status) => {
-        switch (status) {
-            case 'online': return 'text-green-600';
-            case 'offline': return 'text-red-600';
-            case 'warning': return 'text-yellow-600';
-            default: return 'text-gray-600';
+        if (showAttendanceOnly) {
+            filtered = filtered.filter(device => device.for_attendance === 1);
         }
-    };
 
-    const getSignalStrength = (signal) => {
-        if (signal >= 80) return 'excellent';
-        if (signal >= 60) return 'good';
-        if (signal >= 40) return 'fair';
-        return 'poor';
-    };
+        if (!searchTerm.trim()) return filtered;
 
-    const getBatteryColor = (battery) => {
-        if (battery >= 60) return 'bg-green-500';
-        if (battery >= 30) return 'bg-yellow-500';
-        return 'bg-red-500';
-    };
+        const term = searchTerm.toLowerCase();
+        return filtered.filter(device =>
+            device.device_name?.toLowerCase().includes(term) ||
+            device.ip_address?.toLowerCase().includes(term) ||
+            device.serial_number?.toLowerCase().includes(term)
+        );
+    }, [devices, searchTerm, showOnlineOnly, showAttendanceOnly]);
 
     return (
-        <div className="min-h-screen bg-gray-50 p-6">
-            {/* Header */}
-            <div className="mb-8">
-                <h1 className="text-4xl font-bold text-gray-900 mb-2">Biometric Devices Dashboard</h1>
-                <p className="text-gray-600">Real-time monitoring and status of all biometric security devices</p>
-            </div>
-
-            {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-                <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <p className="text-sm font-medium text-gray-600">Total Devices</p>
-                            <p className="text-2xl font-bold text-gray-900">{stats.totalDevices}</p>
+        <div className="min-h-screen bg-slate-50 p-4 md:p-6 lg:p-8">
+            <div className="max-w-7xl mx-auto">
+                {/* Header */}
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+                    <div>
+                        <div className="flex items-center gap-3 mb-2">
+                            <div className="bg-blue-600 text-white p-2 rounded-lg">
+                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                                </svg>
+                            </div>
+                            <h1 className="text-3xl font-bold text-slate-900">Biometric Devices</h1>
                         </div>
-                        <div className="bg-blue-100 rounded-full p-3">
-                            <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
-                            </svg>
+                        <p className="text-slate-500 ml-1">Real-time monitoring and status overview</p>
+                    </div>
+                    <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-lg shadow-sm border border-slate-200">
+                        <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                            <span className="text-sm font-medium text-slate-700">Live</span>
+                        </div>
+                        <div className="w-px h-4 bg-slate-300"></div>
+                        <div className="text-sm text-slate-500">
+                            Updated: <span className="font-medium text-slate-700">{formatLastUpdated(lastUpdated)}</span>
                         </div>
                     </div>
                 </div>
 
-                <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <p className="text-sm font-medium text-gray-600">Online</p>
-                            <p className="text-2xl font-bold text-green-600">{stats.onlineDevices}</p>
+                {/* Stats Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="bg-blue-50 text-blue-600 p-3 rounded-lg">
+                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                                </svg>
+                            </div>
+                            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total</span>
                         </div>
-                        <div className="bg-green-100 rounded-full p-3">
-                            <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
+                        <p className="text-3xl font-bold text-slate-900">{stats.totalDevices}</p>
+                        <p className="text-sm text-slate-500 mt-1">Registered devices</p>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="bg-green-50 text-green-600 p-3 rounded-lg">
+                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                            </div>
+                            <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded-full">{onlineRate}%</span>
                         </div>
+                        <p className="text-3xl font-bold text-slate-900">{stats.onlineDevices}</p>
+                        <p className="text-sm text-slate-500 mt-1">Online devices</p>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="bg-red-50 text-red-600 p-3 rounded-lg">
+                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </div>
+                            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Offline</span>
+                        </div>
+                        <p className="text-3xl font-bold text-slate-900">{stats.offlineDevices}</p>
+                        <p className="text-sm text-slate-500 mt-1">Disconnected devices</p>
                     </div>
                 </div>
 
-
-
-                <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <p className="text-sm font-medium text-gray-600">Offline</p>
-                            <p className="text-2xl font-bold text-red-600">{stats.offlineDevices}</p>
-                        </div>
-                        <div className="bg-red-100 rounded-full p-3">
-                            <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </div>
+                {/* Uptime Progress Bar */}
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-slate-700">Network Availability</span>
+                        <span className="text-sm font-semibold text-slate-900">{onlineRate}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                        <div
+                            className="bg-gradient-to-r from-green-500 to-emerald-400 h-2.5 rounded-full transition-all duration-500"
+                            style={{ width: `${onlineRate}%` }}
+                        ></div>
                     </div>
                 </div>
 
+                {/* Device Table */}
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div className="px-6 py-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                            <h2 className="text-lg font-bold text-slate-900">Device Status Overview</h2>
+                            <p className="text-sm text-slate-500">{filteredDevices.length} device{filteredDevices.length !== 1 ? 's' : ''} displayed</p>
+                        </div>
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                            <label className="inline-flex items-center cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={showOnlineOnly}
+                                    onChange={(e) => setShowOnlineOnly(e.target.checked)}
+                                    className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                                />
+                                <span className="ml-2 text-sm font-medium text-slate-700">Online only</span>
+                            </label>
+                            <label className="inline-flex items-center cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={showAttendanceOnly}
+                                    onChange={(e) => setShowAttendanceOnly(e.target.checked)}
+                                    className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                                />
+                                <span className="ml-2 text-sm font-medium text-slate-700">For attendance only</span>
+                            </label>
+                            <div className="relative">
+                                <svg className="w-5 h-5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                </svg>
+                                <input
+                                    type="text"
+                                    placeholder="Search devices..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent w-full sm:w-64"
+                                />
+                            </div>
+                        </div>
+                    </div>
 
-
-            </div>
-
-            {/* Device Table */}
-            <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-                <div className="px-6 py-4 border-b border-gray-200">
-                    <h2 className="text-xl font-semibold text-gray-900">Device Status Overview</h2>
-                </div>
-                <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                            <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Status
-                                </th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Device Name
-                                </th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    IP Address
-                                </th>
-
-                            </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {devices?.map(device => (
-                                <tr key={device.id} className="hover:bg-gray-50 transition-colors duration-150">
-                                    {/* Status */}
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                        {status.length > 0 ? (
-                                            <div className="flex items-center">
-                                                {status.find(s => s.deviceID === device.id)?.connected ? (
-                                                    <>
-                                                        <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse mr-3"></div>
-                                                        <span className="text-sm font-medium text-green-600">Online</span>
-                                                        {/* <svg className="w-4 h-4 ml-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                                        </svg> */}
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <div className="w-3 h-3 rounded-full bg-red-500 mr-3"></div>
-                                                        <span className="text-sm font-medium text-red-600">Offline</span>
-                                                        {/* <svg className="w-4 h-4 ml-2 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                                        </svg> */}
-                                                    </>
-                                                )}
-                                            </div>
-                                        ) : (
-                                            <div className="flex items-center">
-                                                <div className="w-3 h-3 rounded-full bg-gray-400 mr-3 animate-pulse"></div>
-                                                <span className="text-sm font-medium text-gray-500">Connecting...</span>
-                                                {/* <svg className="w-4 h-4 ml-2 text-gray-400 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                                </svg> */}
-                                            </div>
-                                        )}
-                                    </td>
-
-                                    {/* Device Name */}
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                        <div className="text-sm font-medium text-gray-900">{device.device_name}</div>
-                                    </td>
-
-                                    {/* IP Address */}
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                        <div className="text-sm font-medium text-gray-900">{device.ip_address}</div>
-                                    </td>
-
-
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-slate-200">
+                            <thead className="bg-slate-50">
+                                <tr>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Device</th>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">IP Address</th>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Serial Number</th>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Last Seen</th>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Active</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-slate-200">
+                                {loading ? (
+                                    <tr>
+                                        <td colSpan="6" className="px-6 py-12 text-center">
+                                            <div className="flex flex-col items-center justify-center text-slate-400">
+                                                <svg className="w-10 h-10 animate-spin mb-3" fill="none" viewBox="0 0 24 24">
+                                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                </svg>
+                                                <p className="text-sm font-medium">Loading devices...</p>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ) : filteredDevices.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="6" className="px-6 py-12 text-center text-slate-500">
+                                            <div className="flex flex-col items-center justify-center">
+                                                <svg className="w-10 h-10 mb-3 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                                </svg>
+                                                <p className="text-sm font-medium">No devices found</p>
+                                                {searchTerm && <p className="text-xs text-slate-400 mt-1">Try adjusting your search</p>}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    filteredDevices.map(device => (
+                                        <tr key={device.id} className="hover:bg-slate-50 transition-colors duration-150">
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                {device.connection_status === 'online' ? (
+                                                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700 border border-green-200">
+                                                        <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+                                                        Online
+                                                    </span>
+                                                ) : (
+                                                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                                                        <span className="w-1.5 h-1.5 bg-red-500 rounded-full mr-2"></span>
+                                                        Offline
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <div className="text-sm font-semibold text-slate-900">{device.device_name}</div>
+                                                <div className="text-xs text-slate-500">{device.mac_address || 'No MAC address'}</div>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <span className="text-sm font-medium text-slate-700 font-mono bg-slate-100 px-2 py-1 rounded">{device.ip_address}</span>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <span className="text-sm text-slate-600 font-mono">{device.serial_number || '—'}</span>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <span className="text-sm text-slate-600">{formatLastSeen(device.last_seen_at)}</span>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${device.is_active ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
+                                                    {device.is_active ? 'Yes' : 'No'}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-            </div>
 
-            {/* Live Indicator */}
-            <div className="fixed bottom-6 right-6 bg-green-500 text-white px-4 py-2 rounded-full shadow-lg flex items-center space-x-2">
-                <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-                <span className="text-sm font-medium">Live Monitoring</span>
+                {/* Footer */}
+                <div className="mt-6 text-center text-xs text-slate-400">
+                    Dashboard refreshes automatically every 10 seconds
+                </div>
             </div>
         </div>
     );
